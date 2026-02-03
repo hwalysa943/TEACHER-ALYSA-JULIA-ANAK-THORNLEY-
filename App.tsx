@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -9,6 +8,9 @@ import {
   TIMESLOTS 
 } from './constants';
 import { Subject, Timeslot, SavedReport, SubjectStats } from './types';
+
+// URL Google Apps Script yang telah di-deploy
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcwYvFACKA0E08QH8P6Gqbb-P_azjiaF_DF0RIFIDd36HF2jtV6c8LhKF9PG0Pa_59Nw/exec"; 
 
 interface Notification {
   id: string;
@@ -33,6 +35,7 @@ const App: React.FC = () => {
   const [analyticsMonth, setAnalyticsMonth] = useState<number>(new Date().getMonth());
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [isSavingToCloud, setIsSavingToCloud] = useState(false);
 
   // Persistence state
   const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
@@ -144,16 +147,19 @@ const App: React.FC = () => {
   };
 
   // Actions
-  const handleSaveSession = () => {
+  const handleSaveSession = async () => {
     if (!selectedTeacherId || !selectedSubject || !selectedTimeslot) {
       addNotification("Sila pilih Guru, Subjek, dan Slot Masa.", "error");
       return;
     }
 
+    const reportId = Date.now().toString();
+    const timestampStr = new Date().toLocaleTimeString('ms-MY');
+
     const newReport: SavedReport = {
-      id: Date.now().toString(),
+      id: reportId,
       date: selectedDate,
-      timestamp: new Date().toLocaleTimeString('ms-MY'),
+      timestamp: timestampStr,
       teacherId: selectedTeacherId,
       teacherName,
       subject: selectedSubject as Subject,
@@ -162,8 +168,41 @@ const App: React.FC = () => {
       totalPresent
     };
 
+    // Prepare data for Google Sheets
+    const pupilData = PUPILS.map(p => ({
+      name: p.name,
+      year: p.year,
+      isPresent: !!attendance[p.id]
+    }));
+
+    setIsSavingToCloud(true);
+    
+    // Save locally first
     setSavedReports(prev => [newReport, ...prev]);
-    addNotification(`Rekod berjaya disimpan untuk ${formattedDate}!`, "success");
+    addNotification(`Rekod disimpan secara lokal!`, "info");
+
+    // Save to Google Sheets if URL provided
+    if (GOOGLE_SCRIPT_URL) {
+      try {
+        const response = await fetch(GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors', // Apps Script requires no-cors often or handles it via redirect
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...newReport,
+            pupilData
+          })
+        });
+        addNotification(`Berjaya dihantar ke Google Sheets!`, "success");
+      } catch (error) {
+        console.error("Cloud save failed", error);
+        addNotification("Gagal simpan ke awan, tetapi disimpan di peranti.", "error");
+      }
+    } else {
+      addNotification("URL Google Script tidak ditetapkan. Data hanya disimpan di peranti ini.", "info");
+    }
+
+    setIsSavingToCloud(false);
   };
 
   const exportPDF = async (ref: React.RefObject<HTMLDivElement | null>, filename: string) => {
@@ -378,7 +417,13 @@ const App: React.FC = () => {
                 <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">{selectedSubject || 'Tiada Subjek'} • {formattedDate}</p>
               </div>
               <div className="flex gap-3">
-                <button onClick={handleSaveSession} className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-700 transition-colors">Simpan Sesi</button>
+                <button 
+                  onClick={handleSaveSession} 
+                  disabled={isSavingToCloud}
+                  className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isSavingToCloud ? 'Menyimpan...' : 'Simpan Sesi'}
+                </button>
                 <button onClick={() => exportPDF(reportRef, `Kehadiran_${selectedDate}_${selectedSubject}.pdf`)} disabled={isExporting} className="px-6 py-3 bg-emerald-600 text-white rounded-2xl font-black shadow-lg hover:bg-emerald-700 transition-colors disabled:opacity-50">Muat Turun PDF</button>
               </div>
             </div>
